@@ -37,9 +37,9 @@ static uint8_t cdc_line_coding[7]= {0x80, 0x25, 0x00, 0x00, 0x00, 0x00, 0x08};
 #define CLS_DTR   (1 << 0)
 #define CLS_RTS   (1 << 1)
 
-#define CDC_INT_INTERFACE_NUMBER  (1)
-#define CDC_INTERFACE_NUMBER  (2)
-#define WEBUSB_INTERFACE_NUMBER  (0)
+#define CDC_INT_INTERFACE_NUMBER  (0)
+#define CDC_INTERFACE_NUMBER  (1)
+#define WEBUSB_INTERFACE_NUMBER  (2)
 
 #define MAX_CDC_REPORT_SIZE MAX_PACKET_SIZE_EPBULK
 
@@ -251,7 +251,9 @@ bool WebUSBCDC::read(uint8_t * buffer, uint32_t * size, bool isCDC, bool blockin
 }
 
 #define FULL_CONFIGURATION_SIZE   (CONFIGURATION_DESCRIPTOR_LENGTH + \
-    (2 * INTERFACE_DESCRIPTOR_LENGTH) + (3 * ENDPOINT_DESCRIPTOR_LENGTH) + 19 + 8)
+    (3 * INTERFACE_DESCRIPTOR_LENGTH) + (5 * ENDPOINT_DESCRIPTOR_LENGTH) + \
+    IAD_DESCRIPTOR_LENGTH + HEADER_FUNCTIONAL_DESCRIPTOR_LENGTH + CALL_MANAGEMENT_FUNCTIONAL_DESCRIPTOR_LENGTH + \
+    ACM_FUNCTIONAL_DESCRIPTOR_LENGTH + UNION_FUNCTIONAL_DESCRIPTOR_LENGTH)
 
 uint8_t * WebUSBCDC::configurationDesc() {
     static uint8_t configDescriptor[] = {
@@ -405,16 +407,16 @@ uint8_t * WebUSBCDC::stringIproductDesc() {
     static uint8_t stringIproductDescriptor[] = {
         0x22,
         STRING_DESCRIPTOR,
-        'e',0,'m',0,'p',0,'i',0,'r',0,'i',0,'K',0,'i',0,'t',0,'|',0,'M',0,'O',0,'T',0,'I',0,'O',0,'N',0
+        'e',0,'m',0,'p',0,'i',0,'r',0,'i',0,'K',0,'i',0,'t',0,'|',0,'M',0,'O',0,'T',0,'I',0,'O',0,'N',0,
     };
     return stringIproductDescriptor;
 }
 
 uint8_t * WebUSBCDC::stringImanufacturerDesc() {
     static uint8_t stringImanufacturerDescriptor[] = {
-        0x13,                                            /*bLength*/
+        0x14,                                            /*bLength*/
         STRING_DESCRIPTOR,                               /*bDescriptorType 0x03*/
-        'e',0,'m',0,'p',0,'i',0,'r',0,'i',0,'K',0,'i',0,'t',0
+        'e',0,'m',0,'p',0,'i',0,'r',0,'i',0,'K',0,'i',0,'t',0,
     };
     return stringImanufacturerDescriptor;
 }
