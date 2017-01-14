@@ -1,5 +1,5 @@
 /*
-* Copyright 2017 Lars Gunder Knudsen
+* Copyright 2017 Ingemar Larsson & Lars Gunder Knudsen / empiriKit
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -17,14 +17,16 @@
 
 
 #include "mbed.h"
+
+#include "empirikit.h"
 #include "WebUSBCDC.h"
-#include "MMA8451Q.h"
 
 #if defined(TARGET_KL46Z)
 #include "SLCD.h"
-#endif
 
-#define MMA8451_I2C_ADDRESS (0x1d<<1)
+SLCD lcd;
+char lcdMessage[40];
+#endif
 
 #if defined(TARGET_KL25Z)
 PwmOut rled(LED_RED);
@@ -38,43 +40,109 @@ void setColor(uint8_t r, uint8_t g, uint8_t b) {
 }
 #endif
 
-#if defined(TARGET_KL46Z)
-SLCD lcd;
-char lcdMessage[40];
-#endif
+void setStreamSamplingRate(int rate) {
+    if (rate < 1 || rate > 100)
+        return;
 
-
-bool detached = false;
-void onDetachRequested() {
-    detached = true;
+    _stream_sampling_rate = rate;
+    _stream_sampling_wait_us = (1000000 / rate);
 }
+
+// Communication
+WebUSBCDC webUSB(0x1209, 0x0001, 0x0001, true);
 
 uint8_t* rbuf;
 uint32_t rbuf_len = 0;
 uint32_t read_size;
 
+uint8_t* rbuf_cdc;
+uint32_t rbuf_len_cdc = 0;
+uint32_t read_size_cdc;
+
+char* sbuf;
+
+
+void sendString(const char* str, bool isCDC=false) {
+    int len = strlen(str);
+    uint32_t byte_count;
+    uint8_t* byte_ptr = (uint8_t*)str;
+
+    while(len>0) {
+        byte_count = MIN(MAX_PACKET_SIZE_EPBULK, len);
+        webUSB.write(byte_ptr, byte_count);
+        len-=MAX_PACKET_SIZE_EPBULK;
+        byte_ptr+=byte_count;
+    }
+}
+
+void sendHardwareInformation() {
+
+    sendString("{\"datatype\":\"HardwareInfo\",\n");
+#if defined(TARGET_KL25Z)
+    sendString("\"devicetype\":\"empiriKit|MOTION\",\n");
+#elif defined(TARGET_KL46Z)
+    sendString("\"devicetype\":\"empiriKit|KL46Z\",\n");
+#endif
+    sprintf(sbuf,"\"version\":\"%s\",\n\"uid\":\"0x%04X%08X%08X\",\n",
+        versionString,
+        *((uint32_t *)0x40048058),
+        *((uint32_t *)0x4004805C),
+        *((uint32_t *)0x40048060));
+    sendString(sbuf);
+    sendString("\"capabilities\":[\n");
+    sendString("\"accelerometer\",\n");
+#if defined(TARGET_KL25Z)
+    sendString("\"rgbled\",\n");
+#elif defined(TARGET_KL46Z)
+    sendString("\"magnetometer\",\n");
+    sendString("\"lightsensor\",\n");
+#endif
+    sendString("\"touchsensor\"\n");
+    sendString("]}");
+}
+
 int params[10];
 
 void handleCMD(uint8_t* cmd_buf, uint32_t size) {
     // very crude "json" parsing. We should put e.g. picoJSON in place here
-    if (strncmp((char*)(&cmd_buf[2]),"SETRGB",6) == 0){
-        sscanf((char*)(&cmd_buf[11]),"%d,%d,%d",&params[0], &params[1], &params[2]);
+
+    char *cmdPtr = (char*)(&cmd_buf[2]);
+    char *valPtr = (char*)(&cmd_buf[10]);
+
+    if (strncmp(cmdPtr,"SETIDL",6) == 0){
+        accelerometerStreaming = 0;
+        touchStreaming = 0;
+        setStreamSamplingRate(DEFAULT_SAMPLING_RATE);
+        currentState = IDLE_STATE;
+    } else if (strncmp(cmdPtr,"LOGACC",6) == 0){
+        currentState = LOG_ACC_STATE;
+    } else if (strncmp(cmdPtr,"NOTIFY",6) == 0){
+        sscanf(valPtr,"%i",&sendNotifications);
 #if defined(TARGET_KL25Z)
+    } else if (strncmp(cmdPtr,"SETRGB",6) == 0){
+        sscanf(valPtr,"[%d,%d,%d]",&params[0], &params[1], &params[2]);
         setColor(params[0], params[1], params[2]);
 #elif defined(TARGET_KL46Z)
-        lcd.printf("%04d",params[0]);
+    } else if (strncmp(cmdPtr,"SETLCD",6) == 0){
+        // TODO:  Set LCD string...
 #endif
+    } else if (strncmp(cmdPtr,"SETRTE",6) == 0){
+        sscanf(valPtr,"%i",&params[0]);
+        setStreamSamplingRate(params[0]);
+    } else if (strncmp(cmdPtr,"STRTCH",6) == 0){
+        sscanf(valPtr,"%i",&touchStreaming);
+    } else if (strncmp(cmdPtr,"STRACC",6) == 0){
+        sscanf(valPtr,"%i",&accelerometerStreaming);
+    } else if (strncmp(cmdPtr,"GETINF",6) == 0){
+        sendHardwareInformation();
+    } else if (strncmp(cmdPtr,"GETLOG",6) == 0){
+        currentState = GET_LOG_STATE;
+    } else {
+        // send help string
+        sendString(helpString);
     }
 }
 
-MMA8451Q acc(PTE25, PTE24);
-int16_t* accData;
-
-WebUSBCDC webUSB(0x1209, 0x0001, 0x0001, true);
-
-uint8_t* rbuf_cdc;
-uint32_t rbuf_len_cdc = 0;
-uint32_t read_size_cdc;
 
 #define MAX_BUF_SIZE 2048
 
@@ -92,23 +160,22 @@ int main()
 
     rbuf = new uint8_t[MAX_BUF_SIZE];
     rbuf_cdc = new uint8_t[MAX_BUF_SIZE];
-    accData = new int16_t[3];
 
-    char* buf = new char[200];
+    sbuf = new char[200];
 
     while (true) {
         // try to read from endpoint
         if(webUSB.read(&rbuf[rbuf_len], &read_size)) {
-            sprintf(buf, "{\"msg\":\"Read %d bytes\"}",(int)read_size);
-            webUSB.write((uint8_t *)buf, strlen(buf));
+            sprintf(sbuf, "{\"msg\":\"Read %d bytes\"}",(int)read_size);
+            sendString(sbuf);
 
             rbuf_len += read_size;
             uint32_t buf_pos = 0;
             while(rbuf_len && buf_pos < rbuf_len) {
                 // crude "find the '}'"
                 if(rbuf[buf_pos] == '}') {
-                    sprintf(buf, "{\"msg\":\"Found end bracket at pos: %d\"}",(int)buf_pos);
-                    webUSB.write((uint8_t *)buf, strlen(buf));
+                    sprintf(sbuf, "{\"msg\":\"Found end bracket at pos: %d\"}",(int)buf_pos);
+                    sendString(sbuf);
 
                     handleCMD(rbuf, buf_pos+1);
                     memmove(rbuf, &rbuf[buf_pos+1], rbuf_len-(buf_pos+1));
@@ -118,16 +185,16 @@ int main()
             }
         }
 
-        if(webUSB.read(rbuf_cdc, &read_size_cdc, true)) {
-            rbuf_cdc[read_size_cdc] = 0;
-            webUSB.write(rbuf_cdc, read_size_cdc);
-        }
+        // if(webUSB.read(rbuf_cdc, &read_size_cdc, true)) {
+        //     rbuf_cdc[read_size_cdc] = 0;
+        //     webUSB.write(rbuf_cdc, read_size_cdc);
+        // }
 
         wait_ms(20); // change to "wait padding"
-        acc.getAccAllAxis(accData);
-        sprintf(buf, "{\"tick\":%d,\"x\":%d,\"y\":%d,\"z\":%d}\n", i,
-            (int)accData[0],(int)accData[1],(int)accData[2]);
-        webUSB.write((uint8_t *)buf, strlen(buf));
+        acc.getAccAllAxis(accXYZ);
+        sprintf(sbuf, "{\"tick\":%d,\"x\":%d,\"y\":%d,\"z\":%d}\n", i,
+            (int)accXYZ[0],(int)accXYZ[1],(int)accXYZ[2]);
+        sendString(sbuf);
 
         i++;
     }
