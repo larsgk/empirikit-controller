@@ -91,10 +91,26 @@ WebUSBCDC::WebUSBCDC(uint16_t vendor_id, uint16_t product_id, uint16_t product_r
     }
 }
 
+char endl_str[] = "\r\n";
+
+#ifdef __DEBUG
+Serial pc(USBTX, USBRX); // tx, rx
+#endif
+
 bool WebUSBCDC::USBCallback_request() {
     bool success = false;
 
     CONTROL_TRANSFER * transfer = getTransferPtr();
+
+#ifdef __DEBUG
+    if(transfer->setup.bRequest == WINUSB_VENDOR_CODE) {
+        pc.printf("Type: %02x\r\n",transfer->setup.bmRequestType.Type);
+        pc.printf("Recipient: %02x\r\n",transfer->setup.bmRequestType.Recipient);
+        pc.printf("bRequest: %02x\r\n",transfer->setup.bRequest);
+        pc.printf("wIndex: %04x\r\n",transfer->setup.wIndex);
+        pc.printf("wValue: %04x\r\n\r\n",transfer->setup.wValue);
+    }
+#endif
 
     // Handle the Microsoft OS Descriptors 1.0 special string descriptor request
     if ((transfer->setup.bmRequestType.Type == STANDARD_TYPE) &&
@@ -146,23 +162,29 @@ bool WebUSBCDC::USBCallback_request() {
     // Process Microsoft OS Descriptors 1.0 Extended Properties ID requests
     // BEWARE: The following descriptor is work in progress - doesn't seem to be 100% correct yet.
     else if ((transfer->setup.bmRequestType.Type == VENDOR_TYPE) &&
-             (transfer->setup.bmRequestType.Recipient == DEVICE_RECIPIENT) &&
+             (transfer->setup.bmRequestType.Recipient == INTERFACE_RECIPIENT) &&
              (transfer->setup.bRequest == WINUSB_VENDOR_CODE) &&
-             (transfer->setup.wIndex == WINUSB_GET_EXTENDED_PROPERTIES_OS_FEATURE_DESCRIPTOR))
+             //(transfer->setup.wValue == WEBUSB_INTERFACE_NUMBER) &&
+             ((transfer->setup.wIndex == WINUSB_GET_EXTENDED_PROPERTIES_OS_FEATURE_DESCRIPTOR) ||
+              (transfer->setup.wIndex == WEBUSB_INTERFACE_NUMBER)))
     {
         static uint8_t msftExtendedPropertiesDescriptor[] = {
-            0x92, 0x00, 0x00, 0x00,         /* dwLength */
+            0x8c, 0x00, 0x00, 0x00,         /* dwLength */
             LSB(COMPATIBLE_ID_VERSION_1_0), /* bcdVersion (LSB) */
             MSB(COMPATIBLE_ID_VERSION_1_0), /* bcdVersion (MSB) */
             LSB(WINUSB_GET_EXTENDED_PROPERTIES_OS_FEATURE_DESCRIPTOR), /* wIndex (LSB) */
             MSB(WINUSB_GET_EXTENDED_PROPERTIES_OS_FEATURE_DESCRIPTOR), /* wIndex (MSB) */
             0x01, 0x00,                     // Number of sections
-            0x88, 0x00, 0x00, 0x00,         // Size of property section
-            0x07, 0x00, 0x00, 0x00,         // Data type (7 = UTF-16)
-            0x2a, 0x00,                     // property name length (42)
-            'D',0,'e',0,'v',0,'i',0,'c',0,'e',0,'I',0,'n',0,'t',0,'e',0,'r',0,'f',0,'a',0,'c',0,'e',0,'G',0,'U',0,'I',0,'D',0,'s',0,0,0,
-            0x50, 0x00, 0x00, 0x00,         // property data length
-            '{',0,'9',0,'1',0,'B',0,'8',0,'D',0,'8',0,'F',0,'A',0,'-',0,'F',0,'E',0,'4',0,'B',0,'-',0,'4',0,'C',0,'0',0,'4',0,'-',0,'9',0,'F',0,'A',0,'8',0,'-',0,'0',0,'6',0,'F',0,'5',0,'D',0,'1',0,'B',0,'A',0,'6',0,'A',0,'F',0,'1',0,'}',0,0,0,0,0,
+            0x82, 0x00, 0x00, 0x00,         // Size of property section
+            0x01, 0x00, 0x00, 0x00,         // Data type (1 = REG_SZ)
+            0x28, 0x00,                     // property name length (40)
+            'D',0,'e',0,'v',0,'i',0,'c',0,'e',0,'I',0,'n',0,'t',0,'e',0,'r',0,'f',0,'a',0,'c',0,'e',0,'G',0,'U',0,'I',0,'D',0,0,0,
+            0x4e, 0x00, 0x00, 0x00,         // property data length (78)
+            '{',0,'F',0,'3',0,'5',0,'E',0,'1',0,'B',0,'9',0,
+            'F',0,'-',0,'9',0,'E',0,'F',0,'1',0,'-',0,'4',0,
+            'D',0,'7',0,'1',0,'-',0,'9',0,'9',0,'D',0,'C',0,
+            '-',0,'B',0,'1',0,'C',0,'B',0,'C',0,'8',0,'0',0,
+            'E',0,'C',0,'1',0,'4',0,'3',0,'}',0,  0,0,
         };
 
         transfer->remaining = sizeof(msftExtendedPropertiesDescriptor);
