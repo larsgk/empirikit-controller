@@ -33,7 +33,7 @@ PwmOut rled(LED_RED);
 PwmOut gled(LED_GREEN);
 PwmOut bled(LED_BLUE);
 
-void setColor(uint8_t r, uint8_t g, uint8_t b) {
+void setRGB(uint8_t r, uint8_t g, uint8_t b) {
     rled = 1.0 - ((float)r/255.0f);
     gled = 1.0 - ((float)g/255.0f);
     bled = 1.0 - ((float)b/255.0f);
@@ -85,9 +85,9 @@ void sendHardwareInformation() {
 #endif
     sprintf(sbuf,"\"version\":\"%s\",\n\"uid\":\"0x%04X%08X%08X\",\n",
         versionString,
-        *((uint32_t *)0x40048058),
-        *((uint32_t *)0x4004805C),
-        *((uint32_t *)0x40048060));
+        *((unsigned int *)0x40048058),
+        *((unsigned int *)0x4004805C),
+        *((unsigned int *)0x40048060));
     sendString(sbuf);
     sendString("\"capabilities\":[\n");
     sendString("\"accelerometer\",\n");
@@ -121,7 +121,7 @@ void handleCMD(uint8_t* cmd_buf, uint32_t size) {
 #if defined(TARGET_KL25Z)
     } else if (strncmp(cmdPtr,"SETRGB",6) == 0){
         sscanf(valPtr,"[%d,%d,%d]",&params[0], &params[1], &params[2]);
-        setColor(params[0], params[1], params[2]);
+        setRGB(params[0], params[1], params[2]);
 #elif defined(TARGET_KL46Z)
     } else if (strncmp(cmdPtr,"SETLCD",6) == 0){
         // TODO:  Set LCD string...
@@ -144,17 +144,17 @@ void handleCMD(uint8_t* cmd_buf, uint32_t size) {
 }
 
 
-#define MAX_BUF_SIZE 2048
+#define MAX_BUF_SIZE 1024
+
+int count = 0;
 
 int main()
 {
-    int i = 0;
-
 #if defined(TARGET_KL25Z)
     rled.period(0.001);
     gled.period(0.001);
     bled.period(0.001);
-    setColor(255,0,0);
+    setRGB(255,0,0);
 #endif
 
 
@@ -163,6 +163,23 @@ int main()
 
     sbuf = new char[200];
 
+    accLog = new int16_t[ACC_LOG_SIZE];
+
+    currentState = IDLE_STATE;
+
+    // Indicate power on with green LED
+    if (accLog)
+        setRGB(0,255,0);
+    else {
+        setRGB(255,0,0);
+        while(1);
+    }
+
+
+    // Start the timer - used for precision sampling rate
+    loopTimer.reset();
+    loopTimer.start();
+
     while (true) {
         // try to read from endpoint
         if(webUSB.read(&rbuf[rbuf_len], &read_size)) {
@@ -170,6 +187,10 @@ int main()
             sendString(sbuf);
 
             rbuf_len += read_size;
+            if(rbuf_len+MAX_PACKET_SIZE_EPBULK >= MAX_BUF_SIZE) {
+                // we are too close to the buffer limit (crude handling)
+                rbuf_len = 0;
+            }
             uint32_t buf_pos = 0;
             while(rbuf_len && buf_pos < rbuf_len) {
                 // crude "find the '}'"
@@ -185,17 +206,140 @@ int main()
             }
         }
 
+        // Handle state
+        switch (currentState) {
+            case IDLE_STATE:
+                // TODO add battery status monitoring, USB connected?
+#if defined(XXTARGET_KL46Z)
+                    sprintf(lcdMessage, "%04d", tsi.readDistance());
+                    lcd.printf(lcdMessage);
+#endif
+                break;
+            case LOG_ACC_STATE:
+#if defined(TARGET_KL46Z)
+                    lcd.printf("LACC");
+#endif
+                count = (count<3)?count+1:0;
+                if (tsi.readDistance() > 20)  // Should do:  Proper swipe detection.
+                    currentState = ACC_READY_STATE;
+                else if (tsi.readDistance() > 0) {
+#if defined(TARGET_KL25Z)
+                    setRGB(0,0,tsi.readDistance() * 12);
+#elif defined(TARGET_KL46Z)
+                    sprintf(lcdMessage, "%04d", tsi.readDistance());
+                    lcd.printf(lcdMessage);
+#endif
+                } else if (count == 0)
+                    setRGB(0,255,0);
+                else
+                    setRGB(0,0,0);
+                break;
+            case ACC_READY_STATE:
+#if defined(TARGET_KL46Z)
+                    lcd.printf("ACCR");
+#endif
+                setRGB(255,0,0);
+                // Blink red LED for 5s to indicate logging will start
+                for (int i=0; i<10; i++) {
+                    wait_ms(500);
+#if defined(TARGET_KL25Z)
+                    setRGB((i&1?0:255),0,0);
+#endif
+#if defined(TARGET_KL46Z)
+                    sprintf(lcdMessage, "-%2ds", (10-i)>>1);
+                    lcd.printf(lcdMessage);
+#endif
+                }
+                // Constant red LED to indicate recording
+                // The following line is commented out (for now) as we get a crash if we send data and are not connected.
+                if (sendNotifications)
+                    sendString("{\"datatype\":\"Notification\",\"data\":\"LoggingStarted\"}\n");
+                setRGB(255,0,0);
+                accLoggedDataLength = ACC_LOG_LENGTH*3;
+                timer.reset();
+                timer.start();
+                accLogPtr = accLog; // Point at the beginning
+#if defined(TARGET_KL46Z)
+                lcd.DP2(1);
+#endif
+                for (int i=0; i<ACC_LOG_LENGTH; i++) {
+                    acc.getAccAllAxis(accLogPtr);
+                    accLogPtr += 3; // Check that this works... might need ++ three times.
+#if defined(TARGET_KL46Z)
+                    sprintf(lcdMessage, "%3ds", i/5);
+                    lcd.printf(lcdMessage);
+#endif
+                    while( timer.read_us() < _stream_sampling_wait_us );
+                    timer.reset();
+
+                    // Check if user swiped to stop logging (TODO: actual swipe detection ;))
+                    if (tsi.readDistance() > 20){
+                        accLoggedDataLength = i*3;
+                        break;
+                    }
+                }
+                timer.stop();
+#if defined(TARGET_KL46Z)
+                lcd.DP2(0);
+                lcd.printf("DONE");
+#endif
+                // The following line is commented out (for now) as we get a crash if we send data and are not connected.
+                if (sendNotifications)
+                    sendString("{\"datatype\":\"Notification\",\"data\":\"LoggingEnded\"}\n");
+                // Set green LED to indicate logging is done
+                setRGB(0,255,0);
+                currentState = IDLE_STATE;  // Done, switch back
+                break;
+            case GET_LOG_STATE:
+                sprintf(sbuf, "{\"datatype\":\"AccelerometerLog\",\n" \
+                             "\"accelrange\":%d,\n" \
+                             "\"accelfactor\":%d,\n" \
+                             "\"samplingrate\":%d,\n" \
+                             "\"data\":[\n",  _accelerometerRange, 8192 / _accelerometerRange, _stream_sampling_rate);
+                sendString(sbuf);
+                for (int i=0; i<accLoggedDataLength; i=i+3) {
+                    if (i<(accLoggedDataLength-3))
+                        sprintf(sbuf,"[%d,%d,%d],\n",accLog[i],accLog[i+1],accLog[i+2]);
+                    else
+                        sprintf(sbuf,"[%d,%d,%d]\n",accLog[i],accLog[i+1],accLog[i+2]);
+                    sendString(sbuf);
+                }
+                sendString("]}\n");
+                currentState = IDLE_STATE;  // Done, switch back
+                break;
+            default:
+                sendString("{\"datatype\":\"StatusMessage\",\"data\":\"Unexpected state.\"}\n");
+        }
+
+        if (touchStreaming || accelerometerStreaming) {
+            // Use the high precision timer
+            while( loopTimer.read_us() < _stream_sampling_wait_us );
+            loopTimer.reset();
+            if (touchStreaming)
+                touchValue = tsi.readDistance();
+            if (accelerometerStreaming)
+                acc.getAccAllAxis(accXYZ);
+            // Separate reading and printing for better precision
+            sprintf(sbuf, "{\"datatype\":\"StreamData\",\n\"samplingrate\":%d", _stream_sampling_rate);
+            sendString(sbuf);
+            if (touchStreaming) {
+                sprintf(sbuf, ",\n\"touchsensordata\":%d", touchValue);
+                sendString(sbuf);
+            }
+            if (accelerometerStreaming) {
+                sprintf(sbuf, ",\n\"accelerometerdata\":[%d,%d,%d]",accXYZ[0],accXYZ[1],accXYZ[2]);
+                sendString(sbuf);
+            }
+            sendString("\n}");
+        } else {
+            wait_ms(100);
+            loopTimer.reset();  // keep it ready
+        }
+
+
         // if(webUSB.read(rbuf_cdc, &read_size_cdc, true)) {
         //     rbuf_cdc[read_size_cdc] = 0;
         //     webUSB.write(rbuf_cdc, read_size_cdc);
         // }
-
-        wait_ms(20); // change to "wait padding"
-        acc.getAccAllAxis(accXYZ);
-        sprintf(sbuf, "{\"tick\":%d,\"x\":%d,\"y\":%d,\"z\":%d}\n", i,
-            (int)accXYZ[0],(int)accXYZ[1],(int)accXYZ[2]);
-        sendString(sbuf);
-
-        i++;
     }
 }

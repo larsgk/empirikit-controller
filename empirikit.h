@@ -1,12 +1,20 @@
-//////////////////////////////////////////////////////////////////////////
-// empiriKit.h for Freescale FRDM-KL25Z board
-//
-// Author:  Ingemar Larsson
-// Date:    2013-08-19
-// Version: 0.25
-// License: TODO decide on license
-//
-//////////////////////////////////////////////////////////////////////////
+/*
+* Copyright 2017 Ingemar Larsson & Lars Gunder Knudsen / empiriKit
+*
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
+*
+*    http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing, software
+* distributed under the License is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+* See the License for the specific language governing permissions and
+* limitations under the License.
+*
+*/
+
 #include "USBSerial.h"  // Virtual serial port
 #include "TSISensor.h"  // Touch sensor
 #include "MMA8451Q.h"   // Accelerometer
@@ -42,8 +50,8 @@ TSISensor tsi;
 int sendNotifications = 0;
 
 #define DEFAULT_SAMPLING_RATE 50 // Sampling rate in Hz
-#define ACC_LOG_LENGTH (DEFAULT_SAMPLING_RATE*20) // Allow 20s sampling log for 50 Hz
-#define ACC_LOG_SIZE (DEFAULT_SAMPLING_RATE*20*3) // Allow 20s sampling log for 50 Hz
+#define ACC_LOG_LENGTH (DEFAULT_SAMPLING_RATE*10) // Allow 10s sampling log for 50 Hz
+#define ACC_LOG_SIZE (ACC_LOG_LENGTH*3) // Allow 18s sampling log for 50 Hz
 #define SAMPLING_WAIT (1000/DEFAULT_SAMPLING_RATE)
 #define SAMPLING_WAIT_US (1000*SAMPLING_WAIT)
 
@@ -65,7 +73,7 @@ enum STATE_TYPE
 const char versionString[] = "14.06.001";
 
 char helpString[] =
-    "{\"message\":["
+    "{\"msg\":["
     "\"CMD => Description\","
     "\"GETINF => Get hardware and firmware information, ({'GETINF':1})\","
 #if defined(TARGET_KL25Z)
@@ -83,4 +91,10 @@ char helpString[] =
 
 
 STATE_TYPE currentState;
+
+//Timers
+Timer timer;
+Timer loopTimer;
+
+
 
